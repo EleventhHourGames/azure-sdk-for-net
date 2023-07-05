@@ -240,6 +240,7 @@ namespace Azure.Messaging.ServiceBus
                     failureReason != ServiceBusFailureReason.SessionLockLost &&
                     failureReason != ServiceBusFailureReason.MessageLockLost)
                 {
+                    var failureTasks = new List<Task>();
                     foreach (ServiceBusReceivedMessage message in GetProcessedMessages(args))
                     {
                         // If the user already settled the message, do not abandon.
@@ -247,26 +248,32 @@ namespace Azure.Messaging.ServiceBus
                         {
                             continue;
                         }
-                        try
+
+                        Func<Task> failureFunc = async () =>
                         {
-                            // Don't pass the processor cancellation token as we want in flight abandon to be able
-                            // to finish even if user stopped processing.
-                            await Receiver.AbandonMessageAsync(message, cancellationToken: CancellationToken.None).ConfigureAwait(false);
-                        }
-                        catch (Exception exception)
-                        {
-                            ThrowIfSessionLockLost(exception, ServiceBusErrorSource.Abandon);
-                            await RaiseExceptionReceived(
-                                    new ProcessErrorEventArgs(
-                                        exception,
-                                        ServiceBusErrorSource.Abandon,
-                                        Processor.FullyQualifiedNamespace,
-                                        Processor.EntityPath,
-                                        Processor.Identifier,
-                                        cancellationToken))
-                                .ConfigureAwait(false);
-                        }
+                            try
+                            {
+                                // Don't pass the processor cancellation token as we want in flight abandon to be able
+                                // to finish even if user stopped processing.
+                                await Receiver.AbandonMessageAsync(message, cancellationToken: CancellationToken.None).ConfigureAwait(false);
+                            }
+                            catch (Exception exception)
+                            {
+                                ThrowIfSessionLockLost(exception, ServiceBusErrorSource.Abandon);
+                                await RaiseExceptionReceived(
+                                        new ProcessErrorEventArgs(
+                                            exception,
+                                            ServiceBusErrorSource.Abandon,
+                                            Processor.FullyQualifiedNamespace,
+                                            Processor.EntityPath,
+                                            Processor.Identifier,
+                                            cancellationToken))
+                                    .ConfigureAwait(false);
+                            }
+                        };
+                        failureTasks.Add(failureFunc.Invoke());
                     }
+                    await Task.WhenAll(failureTasks).ConfigureAwait(false);
                 }
             }
             finally
